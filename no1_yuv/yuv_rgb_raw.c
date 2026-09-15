@@ -19,6 +19,7 @@ unsigned char clip_value(unsigned char x, unsigned char min_val, unsigned char  
 }
 
 //RGB to YUV420
+//每个 2x2 像素块共用一组色度，U、V 分别写入自己的平面
 bool RGB24_TO_YUV420(unsigned char *RgbBuf,int w,int h,unsigned char *yuvBuf)
 {
 	unsigned char*ptrY, *ptrU, *ptrV, *ptrRGB;
@@ -30,22 +31,44 @@ bool RGB24_TO_YUV420(unsigned char *RgbBuf,int w,int h,unsigned char *yuvBuf)
 	for (int j = 0; j<h;j++){
 		ptrRGB = RgbBuf + w*j*3 ;
 		for (int i = 0;i<w;i++){
-			int pos = w*i+j;
 			r = *(ptrRGB++);
 			g = *(ptrRGB++);
 			b = *(ptrRGB++);
-			y = (unsigned char)( ( 66 * r + 129 * g +  25 * b + 128) >> 8) + 16  ;          
-			u = (unsigned char)( ( -38 * r -  74 * g + 112 * b + 128) >> 8) + 128 ;          
+			y = (unsigned char)( ( 66 * r + 129 * g +  25 * b + 128) >> 8) + 16  ;
+			u = (unsigned char)( ( -38 * r -  74 * g + 112 * b + 128) >> 8) + 128 ;
 			v = (unsigned char)( ( 112 * r -  94 * g -  18 * b + 128) >> 8) + 128 ;
 			*(ptrY++) = clip_value(y,0,255);
-			if (j%2==0&&i%2 ==0){
-				*(ptrU++) =clip_value(u,0,255);
+			if (j%2==0 && i%2==0){
+				*(ptrU++) = clip_value(u,0,255);
+				*(ptrV++) = clip_value(v,0,255);
 			}
-			else{
-				if (i%2==0){
-				*(ptrV++) =clip_value(v,0,255);
-				}
-			}
+		}
+	}
+	return true;
+}
+
+//RGB to YUV444
+//每个像素都有独立的 Y、U、V，不做子采样
+bool RGB24_TO_YUV444(unsigned char *RgbBuf,int w,int h,unsigned char *yuvBuf)
+{
+	unsigned char*ptrY, *ptrU, *ptrV, *ptrRGB;
+	memset(yuvBuf,0,w*h*3);
+	ptrY = yuvBuf;
+	ptrU = yuvBuf + w*h;
+	ptrV = ptrU + w*h;
+	unsigned char y, u, v, r, g, b;
+	for (int j = 0; j<h;j++){
+		ptrRGB = RgbBuf + w*j*3 ;
+		for (int i = 0;i<w;i++){
+			r = *(ptrRGB++);
+			g = *(ptrRGB++);
+			b = *(ptrRGB++);
+			y = (unsigned char)( ( 66 * r + 129 * g +  25 * b + 128) >> 8) + 16  ;
+			u = (unsigned char)( ( -38 * r -  74 * g + 112 * b + 128) >> 8) + 128 ;
+			v = (unsigned char)( ( 112 * r -  94 * g -  18 * b + 128) >> 8) + 128 ;
+			*(ptrY++) = clip_value(y,0,255);
+			*(ptrU++) = clip_value(u,0,255);
+			*(ptrV++) = clip_value(v,0,255);
 		}
 	}
 	return true;
@@ -63,7 +86,6 @@ bool RGB24_TO_YUV422(unsigned char *RgbBuf, int w, int h, unsigned char *yuvBuf)
 	for (int j = 0; j < h; j++) {
 		ptrRGB = RgbBuf + w * j * 3;
 		for (int i = 0; i < w; i++) {
-			int pos = w * i + j;
 			r = *(ptrRGB++);
 			g = *(ptrRGB++);
 			b = *(ptrRGB++);
@@ -71,7 +93,7 @@ bool RGB24_TO_YUV422(unsigned char *RgbBuf, int w, int h, unsigned char *yuvBuf)
 			u = (unsigned char)((-38 * r - 74 * g + 112 * b + 128) >> 8) + 128;
 			v = (unsigned char)((112 * r - 94 * g - 18 * b + 128) >> 8) + 128;
 			*(ptrY++) = clip_value(y, 0, 255);
-			if (j % 2 == 0) {
+			if (i % 2 == 0) {
 				*(ptrU++) = clip_value(u, 0, 255);
 				*(ptrV++) = clip_value(v, 0, 255);
 			}
@@ -95,14 +117,59 @@ int simplest_rgb24_to_yuv422(char *url_in, int w, int h, int num, char *url_out)
 	unsigned char *pic_rgb24 = (unsigned char *)malloc(w*h * 3);
 	unsigned char *pic_yuv422 = (unsigned char *)malloc(w*h * 2);
 
+	if (fp==NULL || fp1==NULL || pic_rgb24==NULL || pic_yuv422==NULL){
+		printf("Error: cannot open %s\n",url_in);
+		return -1;
+	}
+
 	for (int i = 0; i < num; i++) {
-		fread(pic_rgb24, 1, w*h * 3, fp);
-		RGB24_TO_YUV420(pic_rgb24, w, h, pic_yuv422);
+		if (fread(pic_rgb24, 1, w*h * 3, fp) != (size_t)(w*h * 3)){
+			printf("Error: %s 数据不足\n",url_in);
+			break;
+		}
+		RGB24_TO_YUV422(pic_rgb24, w, h, pic_yuv422);
 		fwrite(pic_yuv422, 1, w*h * 2, fp1);
 	}
 
 	free(pic_rgb24);
 	free(pic_yuv422);
+	fclose(fp);
+	fclose(fp1);
+
+	return 0;
+}
+
+/**
+ * Convert RGB24 file to YUV444 file
+ * @param url_in  Location of Input RGB file.
+ * @param w       Width of Input RGB file.
+ * @param h       Height of Input RGB file.
+ * @param num     Number of frames to process.
+ * @param url_out Location of Output YUV file.
+ */
+int simplest_rgb24_to_yuv444(char *url_in, int w, int h, int num, char *url_out) {
+	FILE *fp = fopen(url_in, "rb+");
+	FILE *fp1 = fopen(url_out, "wb+");
+
+	unsigned char *pic_rgb24 = (unsigned char *)malloc(w*h * 3);
+	unsigned char *pic_yuv444 = (unsigned char *)malloc(w*h * 3);
+
+	if (fp==NULL || fp1==NULL || pic_rgb24==NULL || pic_yuv444==NULL){
+		printf("Error: cannot open %s\n",url_in);
+		return -1;
+	}
+
+	for (int i = 0; i < num; i++) {
+		if (fread(pic_rgb24, 1, w*h * 3, fp) != (size_t)(w*h * 3)){
+			printf("Error: %s 数据不足\n",url_in);
+			break;
+		}
+		RGB24_TO_YUV444(pic_rgb24, w, h, pic_yuv444);
+		fwrite(pic_yuv444, 1, w*h * 3, fp1);
+	}
+
+	free(pic_rgb24);
+	free(pic_yuv444);
 	fclose(fp);
 	fclose(fp1);
 
@@ -167,22 +234,27 @@ void init_yuv420p_table()
                 w/2
  */
 
-void yuv420p_to_rgb24(unsigned char* yuvbuf,unsigned char* rgbbuf, int width,int height)   
+//YUV planar 转 RGB24，色度按格式做最近邻扩展
+//format: YUV420P / YUV422P / YUV444P
+void yuvp_to_rgb24(unsigned char* yuvbuf, unsigned char* rgbbuf, int width, int height, int format)
 {
-    int y1, y2, u, v;    
-    unsigned char *py1, *py2;   
-    int i, j, c1, c2, c3, c4;   
-    unsigned char *d1, *d2;   
+    int u, v;
+    int i, j, c1, c2, c3, c4;
     unsigned char *src_u, *src_v;
+    unsigned char *d;
     static int init_yuv420p = 0;
-    
-    src_u = yuvbuf + width * height;   // u
-    src_v = src_u + width * height / 4;  // v
 
-    py1 = yuvbuf;   // y
-    py2 = py1 + width;   
-    d1 = rgbbuf;   
-    d2 = d1 + 3 * width;   
+    int uv_w = width, uv_h = height;   //色度平面尺寸
+    if (format == YUV422P) {
+        uv_w = width / 2;
+    }
+    else if (format == YUV420P) {
+        uv_w = width / 2;
+        uv_h = height / 2;
+    }
+
+    src_u = yuvbuf + width * height;          // u
+    src_v = src_u + uv_w * uv_h;              // v
 
     if (init_yuv420p == 0)
     {
@@ -190,47 +262,41 @@ void yuv420p_to_rgb24(unsigned char* yuvbuf,unsigned char* rgbbuf, int width,int
         init_yuv420p = 1;
     }
 
-    for (j = 0; j < height; j += 2)    
-    {    
-        for (i = 0; i < width; i += 2)    
+    for (j = 0; j < height; j++)
+    {
+        for (i = 0; i < width; i++)
         {
-            u = *src_u++;   
-            v = *src_v++;   
-   
-            c1 = crv_tab[v];   
-            c2 = cgu_tab[u];   
-            c3 = cgv_tab[v];   
-            c4 = cbu_tab[u];   
-   
-            //up-left   
-            y1 = tab_76309[*py1++];    
-            *d1++ = clp[384+((y1 + c1)>>16)];     
-            *d1++ = clp[384+((y1 - c2 - c3)>>16)];   
-            *d1++ = clp[384+((y1 + c4)>>16)];   
-   
-            //down-left   
-            y2 = tab_76309[*py2++];   
-            *d2++ = clp[384+((y2 + c1)>>16)];     
-            *d2++ = clp[384+((y2 - c2 - c3)>>16)];   
-            *d2++ = clp[384+((y2 + c4)>>16)];   
-   
-            //up-right   
-            y1 = tab_76309[*py1++];   
-            *d1++ = clp[384+((y1 + c1)>>16)];     
-            *d1++ = clp[384+((y1 - c2 - c3)>>16)];   
-            *d1++ = clp[384+((y1 + c4)>>16)];   
-   
-            //down-right   
-            y2 = tab_76309[*py2++];   
-            *d2++ = clp[384+((y2 + c1)>>16)];     
-            *d2++ = clp[384+((y2 - c2 - c3)>>16)];   
-            *d2++ = clp[384+((y2 + c4)>>16)];   
+            int uv_pos;
+            if (format == YUV444P) {
+                uv_pos = j * uv_w + i;
+            }
+            else if (format == YUV422P) {
+                uv_pos = j * uv_w + i / 2;
+            }
+            else {
+                uv_pos = (j / 2) * uv_w + i / 2;
+            }
+
+            u = src_u[uv_pos];
+            v = src_v[uv_pos];
+
+            c1 = crv_tab[v];
+            c2 = cgu_tab[u];
+            c3 = cgv_tab[v];
+            c4 = cbu_tab[u];
+
+            d = rgbbuf + (j * width + i) * 3;
+            int y1 = tab_76309[yuvbuf[j * width + i]];
+            *d++ = clp[384 + ((y1 + c1) >> 16)];
+            *d++ = clp[384 + ((y1 - c2 - c3) >> 16)];
+            *d   = clp[384 + ((y1 + c4) >> 16)];
         }
-        d1  += 3*width;
-        d2  += 3*width;
-        py1 += width;
-        py2 += width;
     }
+}
+
+void yuv420p_to_rgb24(unsigned char* yuvbuf,unsigned char* rgbbuf, int width,int height)
+{
+    yuvp_to_rgb24(yuvbuf, rgbbuf, width, height, YUV420P);
 }
 
 /**
@@ -249,8 +315,16 @@ int simplest_rgb24_to_yuv420(char *url_in, int w, int h,int num,char *url_out){
 	unsigned char *pic_rgb24=(unsigned char *)malloc(w*h*3);
 	unsigned char *pic_yuv420=(unsigned char *)malloc(w*h*3/2);
 
+	if(fp==NULL||fp1==NULL||pic_rgb24==NULL||pic_yuv420==NULL){
+		printf("Error: cannot open %s\n",url_in);
+		return -1;
+	}
+
 	for(int i=0;i<num;i++){
-		fread(pic_rgb24,1,w*h*3,fp);
+		if(fread(pic_rgb24,1,w*h*3,fp)!=(size_t)(w*h*3)){
+			printf("Error: %s 数据不足\n",url_in);
+			break;
+		}
 		RGB24_TO_YUV420(pic_rgb24,w,h,pic_yuv420);
 		fwrite(pic_yuv420,1,w*h*3/2,fp1);
 	}
@@ -271,26 +345,26 @@ int simplest_rgb24_to_yuv420(char *url_in, int w, int h,int num,char *url_out){
  * @param url_out      Location of Output BMP file.
  */
 int simplest_rgb24_to_bmp(unsigned char *rgb24buf,int width,int height,const char *bmppath){
-	typedef struct 
-	{  
-		long imageSize;
-		long blank;
-		long startPosition;
+	typedef struct
+	{
+		int imageSize;
+		int blank;
+		int startPosition;
 	}BmpHead;
 
 	typedef struct
 	{
-		long  Length;
-		long  width;
-		long  height;
+		int  Length;
+		int  width;
+		int  height;
 		unsigned short  colorPlane;
 		unsigned short  bitColor;
-		long  zipFormat;
-		long  realSize;
-		long  xPels;
-		long  yPels;
-		long  colorUse;
-		long  colorImportant;
+		int  zipFormat;
+		int  realSize;
+		int  xPels;
+		int  yPels;
+		int  colorUse;
+		int  colorImportant;
 	}InfoHead;
 
 	int i=0,j=0;
@@ -347,7 +421,6 @@ int simplest_rgb24_to_bmp(unsigned char *rgb24buf,int width,int height,const cha
 	//free(rgb24_buffer);
 	printf("Finish generate %s!\n",bmppath);
 	return 0;
-	return 0;
 }
 /**
  * Convert YUV420P file to  RGB24 file
@@ -357,27 +430,39 @@ int simplest_rgb24_to_bmp(unsigned char *rgb24buf,int width,int height,const cha
  * @param num     Number of frames to process.
  * @param url_out Location of Output RGB file.
  */
-int simplest_yuv420_to_bmp(char *url_in, int w, int h,char *url_out){
+int simplest_yuv_to_bmp(char *url_in, int w, int h, int format, char *url_out){
 	FILE *fp=fopen(url_in,"rb+");
-	//FILE *fp1=fopen(url_out,"wb+");
 
 	unsigned char *pic_rgb24=(unsigned char *)malloc(w*h*3);
-	unsigned char *pic_yuv420=(unsigned char *)malloc(w*h*3/2);
+	unsigned char *pic_yuv=(unsigned char *)malloc(w*h*3);
 
-	//for(int i=0;i<num;i++){
-	fread(pic_yuv420,1,w*h*3/2,fp);
-		yuv420p_to_rgb24(pic_yuv420,pic_rgb24,w,h);
-        //fread(pic_rgb24,1,w*h*3,fp);
-        simplest_rgb24_to_bmp(pic_rgb24,w,h, url_out);
-		
-	//}
+	if (fp==NULL || pic_rgb24==NULL || pic_yuv==NULL){
+		printf("Error: cannot open %s\n",url_in);
+		return -1;
+	}
+
+	//按格式读取原始数据：420->1.5 字节/像素，422->2，444->3
+	int frame_bytes = format==YUV420P ? w*h*3/2 : (format==YUV422P ? w*h*2 : w*h*3);
+	if (fread(pic_yuv,1,frame_bytes,fp) != (size_t)frame_bytes){
+		printf("Error: %s 数据不足，需要 %d 字节\n",url_in,frame_bytes);
+		free(pic_rgb24);
+		free(pic_yuv);
+		fclose(fp);
+		return -1;
+	}
+
+	yuvp_to_rgb24(pic_yuv,pic_rgb24,w,h,format);
+	simplest_rgb24_to_bmp(pic_rgb24,w,h, url_out);
 
 	free(pic_rgb24);
-	free(pic_yuv420);
+	free(pic_yuv);
 	fclose(fp);
-	//fclose(fp1);
 
 	return 0;
+}
+
+int simplest_yuv420_to_bmp(char *url_in, int w, int h,char *url_out){
+	return simplest_yuv_to_bmp(url_in, w, h, YUV420P, url_out);
 }
 
 /**
