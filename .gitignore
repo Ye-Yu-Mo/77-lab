@@ -5,6 +5,16 @@ build/
 dist/
 wheels/
 *.egg-info
-
+Debug
+*.rgb
+*.yuv
+*.exe
+*.sln
+*.db
+*.bmp
+yuv_mac
+yuv/
+*.docx
+*.md
 # Virtual environments
 .venv
